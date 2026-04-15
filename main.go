@@ -1,44 +1,78 @@
 package main
+
 import (
 	"bufio"
-	"os"
 	"fmt"
 	"log"
-	"strings"
+	"os"
 	"sort"
+	"strings"
+	"sync"
 )
+
+const numWorkers = 4
+
 type Result struct {
-    Username string
-    Count    int
+	Username string
+	Count    int
 }
-func main(){
-	file,err := os.Open("input.txt")
-	
-	if err!=nil{
+
+func main() {
+	file, err := os.Open("input.txt")
+	if err != nil {
 		log.Fatal(err)
 	}
-	
-	os.RemoveAll("intermediate")
-	os.MkdirAll("intermediate", 0755)
 	defer file.Close()
 
+	os.RemoveAll("intermediate")
+	os.MkdirAll("intermediate", 0755)
+
+	// Read all lines into memory
+	var lines []string
 	scanner := bufio.NewScanner(file)
-
-	for scanner.Scan(){
-		parts:= strings.Split(scanner.Text(),"|")
-		username:= strings.TrimSpace(parts[0])
-		
-		outFile, err := os.OpenFile("intermediate/"+username+".txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-    		log.Fatal(err)
-		}
-		outFile.WriteString(username + ",1\n")
-		outFile.Close()
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
 	}
-
-	if err:= scanner.Err();err!=nil{
+	if err := scanner.Err(); err != nil {
 		log.Fatal(err)
 	}
+
+	// Split lines into chunks for each worker
+	chunkSize := (len(lines) + numWorkers - 1) / numWorkers
+	var wg sync.WaitGroup
+	var mu sync.Mutex // protects concurrent file writes
+
+	for i := 0; i < numWorkers; i++ {
+		start := i * chunkSize
+		end := start + chunkSize
+		if end > len(lines) {
+			end = len(lines)
+		}
+		if start >= len(lines) {
+			break
+		}
+
+		wg.Add(1)
+		go func(chunk []string) {
+			defer wg.Done()
+			for _, line := range chunk {
+				parts := strings.Split(line, "|")
+				username := strings.TrimSpace(parts[0])
+
+				mu.Lock()
+				outFile, err := os.OpenFile("intermediate/"+username+".txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+				if err != nil {
+					mu.Unlock()
+					log.Fatal(err)
+				}
+				outFile.WriteString(username + ",1\n")
+				outFile.Close()
+				mu.Unlock()
+			}
+		}(lines[start:end])
+	}
+
+	wg.Wait()
 
 	// reading frm /intermediate
 	results := []Result{}
